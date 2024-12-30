@@ -1,0 +1,16 @@
+# Beanfuzz is used to "fuzz" competitive programming questions, notably ones from TOKI's site (https://tlx.toki.id/).
+# It compares output between 2 executables. All arguments are piped into the executable (i.e _not_ passed as command line arguments).
+
+# Fuzzer info example.
+# You can use hashtags to comment.
+
+0 <= N <= 100
+0 <= A[N]# <= 100000000
+1 <= B,C <= 7
+
+# Below, A will be expanded to the actual content of the array.
+# For example, N is picked as 3. A will be expanded to three items
+# with each ranging from 0 to 100000000 inclusive. For example: 3 4 5
+input order: N A B C
+input separator: \n
+output separator: \n
