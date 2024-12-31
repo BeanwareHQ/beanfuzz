@@ -2,28 +2,28 @@ use std::vec::IntoIter;
 
 use crate::error::{AppError, AppResult};
 
-use super::tokenizer::{ComparisonType, ExprVariable, Token};
+use super::tokenizer::{tokenize_expr_line, ComparisonType, ExprVariable, Token};
 
-const DEFAULT_INPUT_SEPARATOR: char = '\n';
-const DEFAULT_OUTPUT_SEPARATOR: char = '\n';
 
 #[derive(Default, Debug, PartialEq)]
 /// A single expression for the fuzzer. An example of an expression is `0 <= A <= 1000`.
-struct FuzzExpr<'a> {
+struct FuzzExpr {
     /// The constant minimum of the expression.
     const_min: i64,
     /// The constant maximum of the expression.
     const_max: i64,
-    /// Variable groups declared inside the expression, sorted from left-to-right exactly like how
-    /// it's written. For example, `0 <= B <= C,D <= 1000` will give `vec[(B), (C,D)]`.
-    vars: Vec<&'a Vec<ExprVariable>>,
+    /// Variable groups declared inside the expression, sorted from right-to-left reversed like how
+    /// it's written. For example, `0 <= B <= C,D <= 1000` will give `vec[(C,D), (B)]`.
+    vars: Vec<Vec<ExprVariable>>,
     /// Vector of comparisons that we use to modify the maximum constant when picking random
-    /// number. When we encounter a less than comparison, we reduce the maximum random range by 1
+    /// number. Reversed like how it is written. When we encounter a less than comparison, we reduce the maximum random range by 1
     /// (we're talking inclusive range).
-    comparisons: Vec<&'a ComparisonType>,
+    comparisons: Vec<ComparisonType>,
     /// When the expression contains an array, we store it in a separate vector to evaluate later.
-    /// This is because the array may contain another variable, and since I don't want to bother
-    /// with dependency resolving, this is good enough.
+    /// This is because the array may contain another variable for the length, and since I don't
+    /// want to bother with dependency resolving, this is good enough. However, cases with single
+    /// expression like `0 <= A[N]# <= N <= 2000` will still not be allowed (as the `N` is declared
+    /// _after_ `A[N]#`).
     contains_array: bool
 }
 
@@ -44,14 +44,15 @@ fn expr_var_arr_contains_arr_var(slice: &[ExprVariable]) -> bool {
     false
 
 }
-/// Try to parse a vector of tokens from a single line of file into an expression.
+/// Try to parse a vector of tokens from a single line of file into an expression. Consumes the
+/// given tokens and moves it into the resulting `FuzzExpr`.
 ///
 /// # Arguments
 /// - `tokens`: slice of tokens to parse
 ///
 /// # Returns
 /// An `Option` containing a `FuzzExpr` when parsing is successful.
-fn parse_expr_from_line<'a>(tokens: &'a [Token]) -> Option<FuzzExpr<'a>> {
+fn parse_expr_from_line(tokens: &mut Vec<Token>) -> Option<FuzzExpr> {
     // Do some sanity checks first: the least amount of valid tokens for a valid expression is 5
     // (e.g `2 <= x <= 10`).
     if tokens.len() < 5 {
@@ -59,91 +60,137 @@ fn parse_expr_from_line<'a>(tokens: &'a [Token]) -> Option<FuzzExpr<'a>> {
     }
     let mut fuzz_expr = FuzzExpr::default();
 
-    // Parse from right to left.
-    let mut i = tokens.len() - 1 - 3;
-
-    // Try to parse the first three tokens first.
-    if let Token::NumValue(x) = tokens.last()? {
-        fuzz_expr.const_max = *x;
+    if let Token::NumValue(x) = tokens.pop()? {
+        fuzz_expr.const_max = x;
     } else {
         return None
     }
 
-    if let Token::NumValue(x) = tokens.first()? {
-        fuzz_expr.const_min = *x;
-    } else {
-        return None;
-    };
-
-    if let Token::Comparison(comp) = &tokens[i + 2] {
+    // Try to parse the first three tokens first.
+    if let Token::Comparison(comp) = tokens.pop()? {
         fuzz_expr.comparisons.push(comp);
     } else {
         return None;
     };
 
-    if let Token::VariableGroup(vars) = &tokens[i + 1] {
-        fuzz_expr.vars.push(vars);
-        //
+    if let Token::VariableGroup(vars) = tokens.pop()? {
         // TODO: maybe this O(n) operation can be improved? This should be fine though as the
         // vector shouldn't contain too many items.
 
-        // Only do the check if the `contains_array` is still `false`.
-        if !fuzz_expr.contains_array && expr_var_arr_contains_arr_var(vars) {
+        if !fuzz_expr.contains_array && expr_var_arr_contains_arr_var(&vars) {
             fuzz_expr.contains_array = true;
         }
+
+        fuzz_expr.vars.push(vars);
     } else {
         return None;
     }
 
     // Parse the rest of the tokens. Parse chunks of two tokens.
-    while i >= 1 {
-        if let Token::Comparison(comp) = &tokens[i] {
+    while tokens.len() > 0 {
+        if let Token::Comparison(comp) = tokens.pop()? {
             fuzz_expr.comparisons.push(comp);
         } else {
             return None;
         }
 
-        if let Token::VariableGroup(vars) = &tokens[i - 1] {
-            fuzz_expr.vars.push(vars);
-            if !fuzz_expr.contains_array && expr_var_arr_contains_arr_var(vars) {
+        let second_token = tokens.pop()?;
+        if let Token::VariableGroup(vars) = second_token {
+            if !fuzz_expr.contains_array && expr_var_arr_contains_arr_var(&vars) {
                 fuzz_expr.contains_array = true;
             }
-        } else if i - 1 == 0 { // last item is a constant so we should stop parsing.
+            fuzz_expr.vars.push(vars);
+        } else if let Token::NumValue(x) = second_token { // last item is a constant so we should stop parsing.
+            fuzz_expr.const_min = x;
             return Some(fuzz_expr)
         } else {
             return None
         }
-
-        i -= 2;
     };
 
     None
 
 }
 
-struct FuzzData<'a> {
-    exprs: Vec<FuzzExpr<'a>>,
-    input_order: Vec<&'a ExprVariable>,
+/// The whole data used to start the fuzzing. Create one by running `Self::new`.
+struct FuzzData {
+    /// Vector of valid fuzzer expressions.
+    exprs: Vec<FuzzExpr>,
+    /// The input order. After all variables have been set in hashmap(s), the strings below will be
+    /// used to lookup the variable values from the hashmap.
+    input_order: Option<Vec<String>>,
     input_separator: char,
     output_separator: char
 }
 
-impl FuzzData<'_> {
+impl FuzzData {
+    /// Create a new `FuzzData`.
+    ///
+    /// # Arguments
+    /// - `input_separator`: the input separator.
+    /// - `output_separator`: the output separator.
+    ///
+    /// # Returns
+    /// An intiialized `FuzzData`.
+    pub fn new(input_separator: char, output_separator: char) -> Self {
+        Self {
+            exprs: Vec::new(),
+            input_order: None,
+            input_separator,
+            output_separator
+        }
+    }
+
     /// Parse lines of a file.
-    fn parse(lines: IntoIter<String>) -> AppResult<Self> {
-        let mut input_separator = DEFAULT_INPUT_SEPARATOR;
-        let mut output_separator = DEFAULT_OUTPUT_SEPARATOR;
+    ///
+    /// # Arguments
+    /// - `lines`: An iterator over `String`s.
+    /// 
+    /// # Returns
+    /// A `AppResult` containing `Self` when parse succeeded. `Err` containing `AppError` otherwise.
+    pub fn parse(&mut self, lines: IntoIter<String>) -> AppResult<Self> {
+        let mut i = 1;
         for line in lines {
-            if line.starts_with("#") {
+            if line.starts_with("#") || line.is_empty() {
                 continue
             }
+
+            if line.starts_with("input order:") {
+                if self.input_order.is_none() {
+
+                let input_order: Vec<&str> = line.split(":").collect();
+
+                if input_order.len() < 2 {
+                    return Err(AppError::InvalidSyntax(i, line))
+                }
+
+                let vars: Vec<String> = input_order[1].split_whitespace().map(|str| str.into()).collect();
+                    self.input_order = Some(vars);
+                } else {
+                    return Err(AppError::MultipleInputOrder)
+                }
+                continue;
+            }
+
+            // Anything other than the two above are treated as an expression.
+            if let Some(mut tokens) = tokenize_expr_line(&line) {
+                if let Some(expr) = parse_expr_from_line(&mut tokens) {
+                    self.exprs.push(expr);
+                } else {
+                    return Err(AppError::InvalidSyntax(i, line))
+                };
+            } else {
+                return Err(AppError::InvalidExpression(i, line))
+            }
+            i += 1;
+
         }
 
         Ok(Self {
             exprs: todo!(),
             input_order: todo!(),
-            input_separator,
-            output_separator
+            input_separator: self.input_separator,
+            output_separator: self.output_separator
         })
     }
 }
@@ -155,28 +202,21 @@ mod tests {
     #[test]
     fn test_parse_tokens() {
         // "1 < A[10] <= C,D <= 100000"
-        let tokens = vec![Token::NumValue(1),
+        let mut tokens = vec![Token::NumValue(1),
             Token::Comparison(ComparisonType::LessThan), Token::VariableGroup(vec!["A[10]#".into()]),
             Token::Comparison(ComparisonType::LessThanOrEqualTo),
             Token::VariableGroup(vec!["C".into(), "D".into()]),
             Token::Comparison(ComparisonType::LessThanOrEqualTo), Token::NumValue(100000)];
 
-        // These cannot exist on their own in the struct as the struct will try to make references
-        // to existing variables outside of itself.
-        // Outside the test, the `FuzzExpr`'s `vars` vector would have references to the tokens's
-        // inner vectors previously made. It has to live as long as the created `Vec<Token>` at the very least.
-        let vars_1: Vec<ExprVariable> = vec!["C".into(), "D".into()];
-        let vars_2: Vec<ExprVariable> = vec!["A[10]#".into()];
-
         let should_be = FuzzExpr {
             contains_array: true,
-            vars: vec![&vars_1, &vars_2], // reversed
-            comparisons: vec![&ComparisonType::LessThanOrEqualTo, &ComparisonType::LessThanOrEqualTo, &ComparisonType::LessThan], // reversed
+            vars: vec![vec!["C".into(), "D".into()], vec!["A[10]#".into()]], // reversed
+            comparisons: vec![ComparisonType::LessThanOrEqualTo, ComparisonType::LessThanOrEqualTo, ComparisonType::LessThan], // reversed
             const_min: 1,
             const_max: 100000
         };
 
-        let test_parse = parse_expr_from_line(&tokens);
+        let test_parse = parse_expr_from_line(&mut tokens);
         assert_eq!(test_parse, Some(should_be));
     }
 }
