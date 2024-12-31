@@ -113,6 +113,7 @@ fn parse_expr_from_line(tokens: &mut Vec<Token>) -> Option<FuzzExpr> {
 }
 
 /// The whole data used to start the fuzzing. Create one by running `Self::new`.
+#[derive(Debug, PartialEq)]
 struct FuzzData {
     /// Vector of valid fuzzer expressions.
     exprs: Vec<FuzzExpr>,
@@ -124,23 +125,6 @@ struct FuzzData {
 }
 
 impl FuzzData {
-    /// Create a new `FuzzData`.
-    ///
-    /// # Arguments
-    /// - `input_separator`: the input separator.
-    /// - `output_separator`: the output separator.
-    ///
-    /// # Returns
-    /// An intiialized `FuzzData`.
-    pub fn new(input_separator: char, output_separator: char) -> Self {
-        Self {
-            exprs: Vec::new(),
-            input_order: None,
-            input_separator,
-            output_separator
-        }
-    }
-
     /// Parse lines of a file.
     ///
     /// # Arguments
@@ -148,24 +132,27 @@ impl FuzzData {
     /// 
     /// # Returns
     /// A `AppResult` containing `Self` when parse succeeded. `Err` containing `AppError` otherwise.
-    pub fn parse(&mut self, lines: IntoIter<String>) -> AppResult<Self> {
-        let mut i = 1;
+    pub fn parse(input_separator: char, output_separator: char, lines: IntoIter<String>) -> AppResult<Self> {
+        let mut exprs = Vec::new();
+        let mut input_order = None;
+        let mut i = 0;
         for line in lines {
+            i += 1;
             if line.starts_with("#") || line.is_empty() {
                 continue
             }
 
             if line.starts_with("input order:") {
-                if self.input_order.is_none() {
+                if input_order.is_none() {
 
-                let input_order: Vec<&str> = line.split(":").collect();
+                let tmp_input_order: Vec<&str> = line.split(":").collect();
 
-                if input_order.len() < 2 {
+                if tmp_input_order.len() < 2 {
                     return Err(AppError::InvalidSyntax(i, line))
                 }
 
-                let vars: Vec<String> = input_order[1].split_whitespace().map(|str| str.into()).collect();
-                    self.input_order = Some(vars);
+                let vars: Vec<String> = tmp_input_order[1].split_whitespace().map(|str| str.into()).collect();
+                    input_order = Some(vars);
                 } else {
                     return Err(AppError::MultipleInputOrder)
                 }
@@ -175,22 +162,24 @@ impl FuzzData {
             // Anything other than the two above are treated as an expression.
             if let Some(mut tokens) = tokenize_expr_line(&line) {
                 if let Some(expr) = parse_expr_from_line(&mut tokens) {
-                    self.exprs.push(expr);
+                    exprs.push(expr);
                 } else {
                     return Err(AppError::InvalidSyntax(i, line))
                 };
             } else {
                 return Err(AppError::InvalidExpression(i, line))
             }
-            i += 1;
+        }
 
+        if input_order.is_none() {
+            return Err(AppError::NoInputOrder);
         }
 
         Ok(Self {
-            exprs: todo!(),
-            input_order: todo!(),
-            input_separator: self.input_separator,
-            output_separator: self.output_separator
+            input_order,
+            exprs,
+            input_separator,
+            output_separator
         })
     }
 }
@@ -200,8 +189,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_parse_tokens() {
-        // "1 < A[10] <= C,D <= 100000"
+    fn test_parse_valid_tokens() {
+        // "1 < A[10]# <= C,D <= 100000"
         let mut tokens = vec![Token::NumValue(1),
             Token::Comparison(ComparisonType::LessThan), Token::VariableGroup(vec!["A[10]#".into()]),
             Token::Comparison(ComparisonType::LessThanOrEqualTo),
@@ -218,5 +207,75 @@ mod tests {
 
         let test_parse = parse_expr_from_line(&mut tokens);
         assert_eq!(test_parse, Some(should_be));
+    }
+
+    #[test]
+    fn test_parse_invalid_tokens() {
+        // "< A[10]# <= C,D <= <= 100000"
+        let mut tokens = vec![Token::Comparison(ComparisonType::LessThan),
+            Token::VariableGroup(vec!["A[10]#".into()]),
+            Token::Comparison(ComparisonType::LessThanOrEqualTo),
+            Token::VariableGroup(vec!["C".into(), "D".into()]),
+            Token::Comparison(ComparisonType::LessThanOrEqualTo),
+            Token::Comparison(ComparisonType::LessThanOrEqualTo), Token::NumValue(100000)];
+
+        let test_parse = parse_expr_from_line(&mut tokens);
+        assert_eq!(test_parse, None);
+    }
+
+    #[test]
+    fn test_parse_valid_file() {
+        let mut file_string: Vec<String> = Vec::new();
+        file_string.push("# Comment".into());
+        file_string.push("".into());
+        file_string.push("".into());
+        file_string.push("1 < A[10]# <= C,D <= 100000".into());
+        file_string.push("input order: A C D".into());
+
+        let expr= FuzzExpr {
+            contains_array: true,
+            vars: vec![vec!["C".into(), "D".into()], vec!["A[10]#".into()]], // reversed
+            comparisons: vec![ComparisonType::LessThanOrEqualTo, ComparisonType::LessThanOrEqualTo, ComparisonType::LessThan], // reversed
+            const_min: 1,
+            const_max: 100000
+        };
+
+        let should_be = FuzzData {
+            output_separator: '\n',
+            input_separator: '\n',
+            exprs: vec![expr],
+            input_order: Some(vec!["A".into(), "C".into(), "D".into()])
+        };
+
+        let result = FuzzData::parse('\n', '\n', file_string.into_iter()).unwrap();
+
+        assert_eq!(result, should_be);
+    }
+
+    #[test]
+    fn test_parse_invalid_file_syntax() {
+        let mut file_string: Vec<String> = Vec::new();
+        file_string.push("# Comment".into());
+        file_string.push("".into());
+        file_string.push("()".into()); // Cannot get tokenized!
+        file_string.push("1 < A[10]# <= C,D <= 100000".into());
+        file_string.push("input order: A C D".into());
+
+        let result = FuzzData::parse('\n', '\n', file_string.into_iter()).unwrap_err();
+
+        assert_eq!(result, AppError::InvalidExpression(3, "()".into()));
+    }
+
+    #[test]
+    fn test_parse_invalid_file_expr() {
+        let mut file_string: Vec<String> = Vec::new();
+        file_string.push("# Comment".into());
+        file_string.push("".into());
+        file_string.push("< A[10]# <= C,D <= 100000 <".into()); // Can be tokenized but cannot be parsed
+        file_string.push("input order: A C D".into());
+
+        let result = FuzzData::parse('\n', '\n', file_string.into_iter()).unwrap_err();
+
+        assert_eq!(result, AppError::InvalidSyntax(3, "< A[10]# <= C,D <= 100000 <".into()));
     }
 }
