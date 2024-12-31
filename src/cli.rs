@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::{fs::canonicalize, path::PathBuf};
 
 use clap::Parser;
 
@@ -8,13 +8,17 @@ use crate::error::{AppResult, AppError};
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
 pub(crate) struct CLIArgs {
+    /// Path to the fuzzing information
+    #[arg()]
+    pub(crate) fuzz_data: PathBuf,
+
     /// Path to the first executable
     #[arg()]
-    pub(crate) file_a: PathBuf,
+    pub(crate) executable_a: PathBuf,
 
     /// Path to the second executable
     #[arg()]
-    pub(crate) file_b: PathBuf,
+    pub(crate) executable_b: PathBuf,
 
     /// Input separator
     #[arg(short = 's', default_value = " ")]
@@ -30,11 +34,20 @@ impl CLIArgs {
     /// `AppResult<Self>` containing an app error when an argument parsing error occured.
     pub fn parse_check() -> AppResult<Self> {
         let result = Self::parse();
-        if !result.file_a.is_file() {
-            return Err(AppError::FileNotFound(result.file_a))
+        if !&result.fuzz_data.is_file() {
+            return Err(AppError::FileNotFound(result.executable_a))
         }
-        if !result.file_b.is_file() {
-            return Err(AppError::FileNotFound(result.file_b))
+
+        if !&result.executable_a.is_file() {
+            return Err(AppError::FileNotFound(result.executable_a))
+        }
+
+        if canonicalize(&result.executable_b)? == canonicalize(&result.executable_a)? {
+            return Err(AppError::SameExecutable)
+        }
+
+        if !&result.executable_b.is_file() {
+            return Err(AppError::FileNotFound(result.executable_b))
         }
         Ok(result)
     }
