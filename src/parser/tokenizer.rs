@@ -46,7 +46,7 @@ pub(crate) enum Token {
 }
 
 // Do not use for the app! Use the non-panicking function `string_to_variable` instead. This is a
-// wrapper for the unit testing below, for the sake of convenience.
+// wrapper for the unit testing, for the sake of convenience.
 impl From<&str> for ExprVariable {
     fn from(value: &str) -> Self {
         if let Some(tok) = string_to_variable(value) {
@@ -123,7 +123,8 @@ pub(crate) fn tokenize(item: &str) -> Option<Token> {
     None
 }
 
-/// Tokenize a line of comparison expression, e.g `"3 < A < 100"`
+/// Tokenize a line of comparison expression, e.g `"3 < A < 100"`. Caller should return an
+/// `AppError::InvalidExpression` when this returns `None`.
 ///
 /// # Arguments
 /// - `line`: line of expression
