@@ -131,7 +131,7 @@ pub(crate) fn tokenize(item: &str) -> Option<Token> {
 ///
 /// # Returns
 /// An `Option` containing vector of `Token`s when parsing is successful.
-fn tokenize_expr_line(line: &str) -> Option<Vec<Token>> {
+pub(crate) fn tokenize_expr_line(line: &str) -> Option<Vec<Token>> {
     let mut tokens = Vec::new();
     let tokens_val = line.split_whitespace();
     for val in tokens_val {
