@@ -1,4 +1,6 @@
-//! Components to tokenize lines.
+//! Components to tokenize lines. Since none of the components really know the context of the
+//! tokenization, they only return `Option<T>`s and the caller can return an `AppError` when it
+//! encounters an error with the entire context information known.
 
 // Who knows maybe someday they'll change, right?
 const LESS_THAN: &str = "<";
@@ -12,39 +14,22 @@ pub(crate) enum ComparisonType {
     LessThanOrEqualTo
 }
 
+/// Enum specifically representing the type of expression used for an array variable's length. For
+/// example, `N` is treated as a `Variable` and `100` is treated as a `Constant`.
 #[derive(PartialEq, Debug)]
-enum ExprVariableType {
-    Array,
-    Variable
+pub(crate) enum LenExpr {
+    Variable(String),
+    Constant(i64)
 }
 
 #[derive(PartialEq, Debug)]
 /// Representation of a variable used in expressions.
-pub(crate) struct ExprVariable {
-    /// Value for variable.
-    pub(crate) value: Option<i64>,
-    /// String representation of the variable.
-    repr: String,
-    /// Whether the variable is an array or not.
-    variable_type: ExprVariableType
-}
-
-impl ExprVariable {
-    /// Create a new `ExprVariable`. The representation string will be consumed by the struct.
-    ///
-    /// # Arguments
-    /// - `repr`: the string representation of the variable
-    /// - `variable_type`: type of the variable (array or not)
-    ///
-    /// # Returns
-    /// An `ExprVariable`.
-    fn new(repr: String, variable_type: ExprVariableType) -> Self {
-        return Self {
-            value: None,
-            repr,
-            variable_type,
-        }
-    }
+pub(crate) enum ExprVariable {
+    /// An array variable. Contains a `String` which represents its string representation and a
+    /// `LenExpr` representing the length of the array.
+    Array(String, LenExpr),
+    /// A variable holding single value.
+    Variable(String)
 }
 
 #[derive(Debug, PartialEq)]
@@ -79,11 +64,22 @@ impl From<&str> for ExprVariable {
 /// # Returns
 /// An `Option` containing an `ExprVariable` if value is valid as a variable.
 fn string_to_variable(string: &str) -> Option<ExprVariable> {
-    if string.ends_with("[]") {
-        let new_string = string.strip_suffix("[]")?.to_string();
-        return Some(ExprVariable::new(new_string.into(), ExprVariableType::Array))
-    } else if !string.contains("[]") && !string.contains(" ") {
-        return Some(ExprVariable::new(string.into(), ExprVariableType::Variable))
+    if string.ends_with("]#") {
+        let new_string = string.strip_suffix("]#")?.to_string();
+        let split: Vec<&str> = new_string.split("[").collect();
+        if split.len() != 2 {
+            return None
+        }
+        let len = split[1];
+        let len_expr;
+        if let Ok(x) = len.parse::<i64>() {
+            len_expr = LenExpr::Constant(x);
+        } else {
+            len_expr = LenExpr::Variable(split[1].into())
+        }
+        return Some(ExprVariable::Array(split[0].into(), len_expr))
+    } else if !(string.contains("[") || string.contains("]") || string.contains(" ")) {
+        return Some(ExprVariable::Variable(string.into()))
     }
     None
 
@@ -113,7 +109,6 @@ pub(crate) fn tokenize(item: &str) -> Option<Token> {
         }
     }
 
-    // Variable rule: does not start with an underscore or a number
     if first.is_ascii_alphabetic() {
         if item.contains(',') {
             let mut tokens = Vec::new();
@@ -154,10 +149,13 @@ mod tests {
 
     #[test]
     fn test_string_to_variable() {
-        assert_eq!(string_to_variable("variable"), Some(ExprVariable::new("variable".into(), ExprVariableType::Variable)));
-        assert_eq!(string_to_variable("some_variable_123"), Some(ExprVariable::new("some_variable_123".into(), ExprVariableType::Variable)));
-        assert_eq!(string_to_variable("array[]"), Some(ExprVariable::new("array".into(), ExprVariableType::Array)));
+        assert_eq!(string_to_variable("variable"), Some(ExprVariable::Variable("variable".into())));
+        assert_eq!(string_to_variable("some_variable_123"), Some(ExprVariable::Variable("some_variable_123".into())));
+        assert_eq!(string_to_variable("array[100]#"), Some(ExprVariable::Array("array".into(), LenExpr::Constant(100))));
+        assert_eq!(string_to_variable("array[N]#"), Some(ExprVariable::Array("array".into(), LenExpr::Variable("N".into()))));
         assert_eq!(string_to_variable("this is invalid"), None);
+        assert_eq!(string_to_variable("this[is not valid]"), None);
+        assert_eq!(string_to_variable("this_is_not_valid[100]"), None);
         assert_eq!(string_to_variable("this_is_not[]valid"), None);
     }
 
