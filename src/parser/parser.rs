@@ -112,7 +112,7 @@ fn parse_expr_from_line(tokens: &mut Vec<Token>) -> Option<FuzzExpr> {
 
 }
 
-/// The whole data used to start the fuzzing. Create one by running `Self::new`.
+/// The whole data used to start the fuzzing. Create one by running `Self::parse`.
 #[derive(Debug, PartialEq)]
 struct FuzzData {
     /// Vector of valid fuzzer expressions.
