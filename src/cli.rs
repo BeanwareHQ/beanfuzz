@@ -10,7 +10,7 @@ use crate::error::{AppResult, AppError};
 pub(crate) struct CLIArgs {
     /// Path to the fuzzing information
     #[arg()]
-    pub(crate) fuzz_data: PathBuf,
+    pub(crate) fuzz_data_filepath: PathBuf,
 
     /// Path to the first executable
     #[arg()]
@@ -26,7 +26,7 @@ pub(crate) struct CLIArgs {
 
     /// Output separator
     #[arg(short = 'o', default_value = " ")]
-    pub(crate) ouput_sep: char,
+    pub(crate) output_sep: char,
 }
 
 impl CLIArgs {
@@ -34,7 +34,7 @@ impl CLIArgs {
     /// `AppResult<Self>` containing an app error when an argument parsing error occured.
     pub fn parse_check() -> AppResult<Self> {
         let result = Self::parse();
-        if !&result.fuzz_data.is_file() {
+        if !&result.fuzz_data_filepath.is_file() {
             return Err(AppError::FileNotFound(result.executable_a))
         }
 

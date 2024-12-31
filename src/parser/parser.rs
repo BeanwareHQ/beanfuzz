@@ -1,4 +1,4 @@
-use std::vec::IntoIter;
+use std::iter::IntoIterator;
 
 use crate::error::{AppError, AppResult};
 
@@ -114,7 +114,7 @@ fn parse_expr_from_line(tokens: &mut Vec<Token>) -> Option<FuzzExpr> {
 
 /// The whole data used to start the fuzzing. Create one by running `Self::parse`.
 #[derive(Debug, PartialEq)]
-struct FuzzData {
+pub(crate) struct FuzzData {
     /// Vector of valid fuzzer expressions.
     exprs: Vec<FuzzExpr>,
     /// The input order. After all variables have been set in hashmap(s), the strings below will be
@@ -128,11 +128,13 @@ impl FuzzData {
     /// Parse lines of a file.
     ///
     /// # Arguments
-    /// - `lines`: An iterator over `String`s.
+    /// - `input_separator`: the input separator
+    /// - `output_separator`: the output separator
+    /// - `lines`: an item that can be iterated over as `String`s
     /// 
     /// # Returns
     /// A `AppResult` containing `Self` when parse succeeded. `Err` containing `AppError` otherwise.
-    pub fn parse(input_separator: char, output_separator: char, lines: IntoIter<String>) -> AppResult<Self> {
+    pub(crate) fn parse<T: IntoIterator<Item = String>>(input_separator: char, output_separator: char, lines: T) -> AppResult<Self> {
         let mut exprs = Vec::new();
         let mut input_order = None;
         let mut i = 0;
@@ -144,8 +146,7 @@ impl FuzzData {
 
             if line.starts_with("input order:") {
                 if input_order.is_none() {
-
-                let tmp_input_order: Vec<&str> = line.split(":").collect();
+                    let tmp_input_order: Vec<&str> = line.split(":").collect();
 
                 if tmp_input_order.len() < 2 {
                     return Err(AppError::InvalidSyntax(i, line))
