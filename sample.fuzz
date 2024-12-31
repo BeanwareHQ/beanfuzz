@@ -12,5 +12,3 @@
 # For example, N is picked as 3. A will be expanded to three items
 # with each ranging from 0 to 100000000 inclusive. For example: 3 4 5
 input order: N A B C
-input separator: \n
-output separator: \n
