@@ -1,30 +1,29 @@
-use std::iter::IntoIterator;
+use std::{collections::VecDeque, iter::IntoIterator};
 
 use crate::error::{AppError, AppResult};
 
-use super::tokenizer::{tokenize_expr_line, ComparisonType, ExprVariable, Token};
-
+use super::tokenizer::{tokenize_expr_line, ComparisonType, ExprVariable, Token, VariableGroup};
 
 #[derive(Default, Debug, PartialEq)]
 /// A single expression for the fuzzer. An example of an expression is `0 <= A <= 1000`.
-struct FuzzExpr {
+pub(crate) struct FuzzExpr {
     /// The constant minimum of the expression.
-    const_min: i64,
+    pub(crate) const_min: i64,
     /// The constant maximum of the expression.
     const_max: i64,
-    /// Variable groups declared inside the expression, sorted from right-to-left reversed like how
-    /// it's written. For example, `0 <= B <= C,D <= 1000` will give `vec[(C,D), (B)]`.
-    vars: Vec<Vec<ExprVariable>>,
+    /// Variable groups declared inside the expression. For example, `0 <= B <= C,D <= 1000` will
+    /// give `vec[(C,D), (B)]`.
+    pub(crate) vars: Vec<VariableGroup>,
     /// Vector of comparisons that we use to modify the maximum constant when picking random
-    /// number. Reversed like how it is written. When we encounter a less than comparison, we reduce the maximum random range by 1
+    /// number. When we encounter a less than comparison, we reduce the maximum random range by 1
     /// (we're talking inclusive range).
-    comparisons: Vec<ComparisonType>,
+    pub(crate) comparisons: Vec<ComparisonType>,
     /// When the expression contains an array, we store it in a separate vector to evaluate later.
     /// This is because the array may contain another variable for the length, and since I don't
     /// want to bother with dependency resolving, this is good enough. However, cases with single
     /// expression like `0 <= A[N]# <= N <= 2000` will still not be allowed (as the `N` is declared
     /// _after_ `A[N]#`).
-    contains_array: bool
+    pub(crate) contains_array: bool
 }
 
 /// Loop through given slice and check if any of its item is an array variable. This is an O(n)
@@ -52,7 +51,7 @@ fn expr_var_arr_contains_arr_var(slice: &[ExprVariable]) -> bool {
 ///
 /// # Returns
 /// An `Option` containing a `FuzzExpr` when parsing is successful.
-fn parse_expr_from_line(tokens: &mut Vec<Token>) -> Option<FuzzExpr> {
+fn parse_expr_from_line(tokens: &mut VecDeque<Token>) -> Option<FuzzExpr> {
     // Do some sanity checks first: the least amount of valid tokens for a valid expression is 5
     // (e.g `2 <= x <= 10`).
     if tokens.len() < 5 {
@@ -60,20 +59,20 @@ fn parse_expr_from_line(tokens: &mut Vec<Token>) -> Option<FuzzExpr> {
     }
     let mut fuzz_expr = FuzzExpr::default();
 
-    if let Token::NumValue(x) = tokens.pop()? {
-        fuzz_expr.const_max = x;
+    if let Token::NumValue(x) = tokens.pop_front()? {
+        fuzz_expr.const_min = x;
     } else {
         return None
     }
 
     // Try to parse the first three tokens first.
-    if let Token::Comparison(comp) = tokens.pop()? {
+    if let Token::Comparison(comp) = tokens.pop_front()? {
         fuzz_expr.comparisons.push(comp);
     } else {
         return None;
     };
 
-    if let Token::VariableGroup(vars) = tokens.pop()? {
+    if let Token::VariableGroup(vars) = tokens.pop_front()? {
         // TODO: maybe this O(n) operation can be improved? This should be fine though as the
         // vector shouldn't contain too many items.
 
@@ -88,20 +87,20 @@ fn parse_expr_from_line(tokens: &mut Vec<Token>) -> Option<FuzzExpr> {
 
     // Parse the rest of the tokens. Parse chunks of two tokens.
     while tokens.len() > 0 {
-        if let Token::Comparison(comp) = tokens.pop()? {
+        if let Token::Comparison(comp) = tokens.pop_front()? {
             fuzz_expr.comparisons.push(comp);
         } else {
             return None;
         }
 
-        let second_token = tokens.pop()?;
+        let second_token = tokens.pop_front()?;
         if let Token::VariableGroup(vars) = second_token {
             if !fuzz_expr.contains_array && expr_var_arr_contains_arr_var(&vars) {
                 fuzz_expr.contains_array = true;
             }
             fuzz_expr.vars.push(vars);
         } else if let Token::NumValue(x) = second_token { // last item is a constant so we should stop parsing.
-            fuzz_expr.const_min = x;
+            fuzz_expr.const_max = x;
             return Some(fuzz_expr)
         } else {
             return None
@@ -192,16 +191,16 @@ mod tests {
     #[test]
     fn test_parse_valid_tokens() {
         // "1 < A[10]# <= C,D <= 100000"
-        let mut tokens = vec![Token::NumValue(1),
+        let mut tokens = VecDeque::from([Token::NumValue(1),
             Token::Comparison(ComparisonType::LessThan), Token::VariableGroup(vec!["A[10]#".into()]),
             Token::Comparison(ComparisonType::LessThanOrEqualTo),
             Token::VariableGroup(vec!["C".into(), "D".into()]),
-            Token::Comparison(ComparisonType::LessThanOrEqualTo), Token::NumValue(100000)];
+            Token::Comparison(ComparisonType::LessThanOrEqualTo), Token::NumValue(100000)]);
 
         let should_be = FuzzExpr {
             contains_array: true,
-            vars: vec![vec!["C".into(), "D".into()], vec!["A[10]#".into()]], // reversed
-            comparisons: vec![ComparisonType::LessThanOrEqualTo, ComparisonType::LessThanOrEqualTo, ComparisonType::LessThan], // reversed
+            vars: vec![vec!["A[10]#".into()], vec!["C".into(), "D".into()]],
+            comparisons: vec![ComparisonType::LessThan, ComparisonType::LessThanOrEqualTo, ComparisonType::LessThanOrEqualTo],
             const_min: 1,
             const_max: 100000
         };
@@ -213,12 +212,12 @@ mod tests {
     #[test]
     fn test_parse_invalid_tokens() {
         // "< A[10]# <= C,D <= <= 100000"
-        let mut tokens = vec![Token::Comparison(ComparisonType::LessThan),
+        let mut tokens = VecDeque::from([Token::Comparison(ComparisonType::LessThan),
             Token::VariableGroup(vec!["A[10]#".into()]),
             Token::Comparison(ComparisonType::LessThanOrEqualTo),
             Token::VariableGroup(vec!["C".into(), "D".into()]),
             Token::Comparison(ComparisonType::LessThanOrEqualTo),
-            Token::Comparison(ComparisonType::LessThanOrEqualTo), Token::NumValue(100000)];
+            Token::Comparison(ComparisonType::LessThanOrEqualTo), Token::NumValue(100000)]);
 
         let test_parse = parse_expr_from_line(&mut tokens);
         assert_eq!(test_parse, None);
@@ -235,8 +234,8 @@ mod tests {
 
         let expr= FuzzExpr {
             contains_array: true,
-            vars: vec![vec!["C".into(), "D".into()], vec!["A[10]#".into()]], // reversed
-            comparisons: vec![ComparisonType::LessThanOrEqualTo, ComparisonType::LessThanOrEqualTo, ComparisonType::LessThan], // reversed
+            vars: vec![vec!["A[10]#".into()], vec!["C".into(), "D".into()]],
+            comparisons: vec![ComparisonType::LessThan, ComparisonType::LessThanOrEqualTo, ComparisonType::LessThanOrEqualTo],
             const_min: 1,
             const_max: 100000
         };

@@ -2,9 +2,13 @@
 //! tokenization, they only return `Option<T>`s and the caller can return an `AppError` when it
 //! encounters an error with the entire context information known.
 
+use std::collections::VecDeque;
+
 // Who knows maybe someday they'll change, right?
 const LESS_THAN: &str = "<";
 const LESS_THAN_OR_EQUAL_TO: &str = "<=";
+
+pub(crate) type VariableGroup = Vec<ExprVariable>;
 
 #[derive(Debug)]
 #[derive(PartialEq)]
@@ -39,7 +43,7 @@ pub(crate) enum Token {
     Comparison(ComparisonType),
 
     /// A group of variable names.
-    VariableGroup(Vec<ExprVariable>),
+    VariableGroup(VariableGroup),
 
     /// A constant 64-bit integer.
     NumValue(i64)
@@ -131,12 +135,12 @@ pub(crate) fn tokenize(item: &str) -> Option<Token> {
 ///
 /// # Returns
 /// An `Option` containing vector of `Token`s when parsing is successful.
-pub(crate) fn tokenize_expr_line(line: &str) -> Option<Vec<Token>> {
-    let mut tokens = Vec::new();
+pub(crate) fn tokenize_expr_line(line: &str) -> Option<VecDeque<Token>> {
+    let mut tokens = VecDeque::new();
     let tokens_val = line.split_whitespace();
     for val in tokens_val {
         if let Some(token) = tokenize(val) {
-            tokens.push(token);
+            tokens.push_back(token);
         } else {
             return None
         }
@@ -175,11 +179,11 @@ mod tests {
     fn test_tokenize_line() {
         let line = "1 < A <= C,D <= 100000";
         let tokens = tokenize_expr_line(line);
-        assert_eq!(tokens, Some(vec![Token::NumValue(1), Token::Comparison(ComparisonType::LessThan),
+        assert_eq!(tokens, Some(VecDeque::from([Token::NumValue(1), Token::Comparison(ComparisonType::LessThan),
             Token::VariableGroup(vec!["A".into()]), Token::Comparison(ComparisonType::LessThanOrEqualTo),
             Token::VariableGroup(vec!["C".into(), "D".into()]),
             Token::Comparison(ComparisonType::LessThanOrEqualTo),
-            Token::NumValue(100000)]));
+            Token::NumValue(100000)])));
 
         let line_invalid = "3.4 < 123 != 2_XYZ";
         assert!(tokenize_expr_line(line_invalid).is_none());
