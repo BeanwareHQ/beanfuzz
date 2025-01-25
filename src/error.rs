@@ -2,6 +2,8 @@ use std::fmt::Debug;
 use std::process::{ExitCode, Termination};
 use std::path::PathBuf;
 
+use crate::parser::parser::FuzzExpr;
+
 #[derive(PartialEq)]
 pub(crate) enum AppError {
     /// Wrapper for std::io::Error
@@ -43,6 +45,10 @@ pub(crate) enum AppError {
     /// When there's no input order given.
     /// Checked during: parse-time
     NoInputOrder,
+
+    /// When array size is 0 or negative.
+    /// Checked during: execution-time
+    InvalidArraySize(i64, FuzzExpr),
 }
 
 pub(crate) struct AppResultData {
@@ -85,7 +91,8 @@ impl Debug for AppError {
             Self::MultipleInputOrder => write!(f, "Input order is declared multiple times"),
             Self::NoInputOrder => write!(f, "No input order given"),
             Self::IOError(kind) => write!(f, "I/O error: {}", kind),
-            Self::SameExecutable => write!(f, "Two executables point to the same path")
+            Self::SameExecutable => write!(f, "Two executables point to the same path"),
+            Self::InvalidArraySize(size, expr) => write!(f, "Invalid array size: {} at expression '{}'", size, expr)
         }
     }
 }
