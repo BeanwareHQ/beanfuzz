@@ -2,8 +2,6 @@ use std::fmt::Debug;
 use std::process::{ExitCode, Termination};
 use std::path::PathBuf;
 
-use crate::parser::parser::FuzzExpr;
-
 #[derive(PartialEq)]
 pub(crate) enum AppError {
     /// Wrapper for std::io::Error
@@ -34,7 +32,7 @@ pub(crate) enum AppError {
     DoubleDeclaration(String),
 
     /// When variable is not declared but is written in the input order. Contains `String`
-    /// indicating the variable name. Contains `String` indicating the variable name.
+    /// indicating the variable name.
     /// Checked during: run-time
     UndeclaredVariable(String),
 
@@ -46,9 +44,10 @@ pub(crate) enum AppError {
     /// Checked during: parse-time
     NoInputOrder,
 
-    /// When array size is 0 or negative.
+    /// When array size is 0 or negative. Contains a `i64` indicating the invalid length and a
+    /// `String` indicating the invalid expression
     /// Checked during: execution-time
-    InvalidArraySize(i64, FuzzExpr),
+    InvalidArraySize(i64, String),
 }
 
 pub(crate) struct AppResultData {
