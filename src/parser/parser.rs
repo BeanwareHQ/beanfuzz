@@ -1,4 +1,4 @@
-use std::{collections::VecDeque, iter::IntoIterator};
+use std::{collections::VecDeque, fmt::Display, iter::IntoIterator};
 
 use crate::error::{AppError, AppResult};
 
@@ -24,6 +24,17 @@ pub(crate) struct FuzzExpr {
     /// expression like `0 <= A[N]# <= N <= 2000` will still not be allowed (as the `N` is declared
     /// _after_ `A[N]#`).
     pub(crate) contains_array: bool
+
+    /// The string representation of the expression. Used for debugging.
+    pub(crate) repr: String
+
+}
+
+impl Display for FuzzExpr {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.repr)
+    }
+    
 }
 
 /// Loop through given slice and check if any of its item is an array variable. This is an O(n)
@@ -58,6 +69,8 @@ fn parse_expr_from_line(tokens: &mut VecDeque<Token>) -> Option<FuzzExpr> {
         return None
     }
     let mut fuzz_expr = FuzzExpr::default();
+
+    fuzz_expr.repr = repr.to_string();
 
     if let Token::NumValue(x) = tokens.pop_front()? {
         fuzz_expr.const_min = x;
@@ -161,7 +174,7 @@ impl FuzzData {
 
             // Anything other than the two above are treated as an expression.
             if let Some(mut tokens) = tokenize_expr_line(&line) {
-                if let Some(expr) = parse_expr_from_line(&mut tokens) {
+                if let Some(expr) = parse_expr_from_line(&line, &mut tokens) {
                     exprs.push(expr);
                 } else {
                     return Err(AppError::InvalidSyntax(i, line))
@@ -202,10 +215,12 @@ mod tests {
             vars: vec![vec!["A[10]#".into()], vec!["C".into(), "D".into()]],
             comparisons: vec![ComparisonType::LessThan, ComparisonType::LessThanOrEqualTo, ComparisonType::LessThanOrEqualTo],
             const_min: 1,
-            const_max: 100000
+            const_max: 100000,
+            less_than_count: 1,
+            repr: "1 < A[10]# <= C,D <= 100000".to_string()
         };
 
-        let test_parse = parse_expr_from_line(&mut tokens);
+        let test_parse = parse_expr_from_line("1 < A[10]# <= C,D <= 100000", &mut tokens);
         assert_eq!(test_parse, Some(should_be));
     }
 
@@ -219,7 +234,7 @@ mod tests {
             Token::Comparison(ComparisonType::LessThanOrEqualTo),
             Token::Comparison(ComparisonType::LessThanOrEqualTo), Token::NumValue(100000)]);
 
-        let test_parse = parse_expr_from_line(&mut tokens);
+        let test_parse = parse_expr_from_line("< A[10]# <= C,D <= <= 100000", &mut tokens);
         assert_eq!(test_parse, None);
     }
 
@@ -232,12 +247,14 @@ mod tests {
         file_string.push("1 < A[10]# <= C,D <= 100000".into());
         file_string.push("input order: A C D".into());
 
-        let expr= FuzzExpr {
+        let expr = FuzzExpr {
             contains_array: true,
             vars: vec![vec!["A[10]#".into()], vec!["C".into(), "D".into()]],
             comparisons: vec![ComparisonType::LessThan, ComparisonType::LessThanOrEqualTo, ComparisonType::LessThanOrEqualTo],
             const_min: 1,
-            const_max: 100000
+            const_max: 100000,
+            less_than_count: 1,
+            repr: "1 < A[10]# <= C,D <= 100000".to_string()
         };
 
         let should_be = FuzzData {
@@ -277,5 +294,20 @@ mod tests {
         let result = FuzzData::parse('\n', '\n', file_string.into_iter()).unwrap_err();
 
         assert_eq!(result, AppError::InvalidSyntax(3, "< A[10]# <= C,D <= 100000 <".into()));
+    }
+
+    #[test]
+    fn test_display_repr() {
+        let expression = FuzzExpr {
+            contains_array: true,
+            vars: vec![vec!["A[10]#".into()], vec!["C".into(), "D".into()]],
+            comparisons: vec![ComparisonType::LessThan, ComparisonType::LessThanOrEqualTo, ComparisonType::LessThanOrEqualTo],
+            const_min: 1,
+            const_max: 100000,
+            less_than_count: 1,
+            repr: "1 < A[10]# <= C,D <= 100000".to_string()
+        };
+
+        assert_eq!("1 < A[10]# <= C,D <= 100000", expression.to_string());
     }
 }
