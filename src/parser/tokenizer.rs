@@ -184,8 +184,20 @@ mod tests {
             Token::VariableGroup(vec!["C".into(), "D".into()]),
             Token::Comparison(ComparisonType::LessThanOrEqualTo),
             Token::NumValue(100000)])));
+    }
 
+    #[test]
+    fn test_tokenize_line_invalid() {
         let line_invalid = "3.4 < 123 != 2_XYZ";
         assert!(tokenize_expr_line(line_invalid).is_none());
+    }
+
+    #[test]
+    fn test_tokenize_line_array() {
+        let line = "1 < A[10]#,B[15]#,C <= 100000";
+        let tokens = tokenize_expr_line(line);
+        assert_eq!(tokens, Some(VecDeque::from([Token::NumValue(1), Token::Comparison(ComparisonType::LessThan),
+            Token::VariableGroup(vec!["A[10]#".into(), "B[15]#".into(), "C".into()]), Token::Comparison(ComparisonType::LessThanOrEqualTo),
+            Token::NumValue(100000)])));
     }
 }
