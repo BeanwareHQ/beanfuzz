@@ -2,9 +2,6 @@ use std::{fs::File, io::{BufRead, BufReader}, path::Path};
 
 use crate::{error::AppResult, parser::parser::FuzzData};
 
-const DEFAULT_INPUT_SEPARATOR: char = '\n';
-const DEFAULT_OUTPUT_SEPARATOR: char = '\n';
-
 struct BufReaderLines {
     buf_reader: BufReader<File>,
 }
@@ -21,6 +18,11 @@ pub fn get_fuzz_data(input_separator: char, output_separator: char, path: &Path)
     let file = File::open(path)?;
     let reader = BufReader::new(file);
     let mut lines = Vec::new();
+
+    // We can't conveniently turn the Result's into Strings while returning any error encountered,
+    // so we loop instead.
+    // This should be okay as our fuzz info files aren't supposed to be long.
+    // Y'all shouldn't abuse this lil boy—coz we read the whole file to memory.
     for line in reader.lines() {
         lines.push(line?);
     };
