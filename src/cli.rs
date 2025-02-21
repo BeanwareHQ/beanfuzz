@@ -35,7 +35,7 @@ impl CLIArgs {
     pub fn parse_check() -> AppResult<Self> {
         let result = Self::parse();
         if !&result.fuzz_data_filepath.is_file() {
-            return Err(AppError::FileNotFound(result.executable_a))
+            return Err(AppError::FileNotFound(result.fuzz_data_filepath))
         }
 
         if !&result.executable_a.is_file() {
