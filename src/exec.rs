@@ -1,11 +1,12 @@
-use std::{collections::HashMap, io::{Read, Write}, process::{ChildStdout, Command}};
+use std::{collections::HashMap, io::{Read, Write}, path::{Path, PathBuf}, process::{Command, Stdio}};
 
 use os_pipe::pipe;
-use rand::{distributions::Uniform, prelude::Distribution, rngs::ThreadRng, thread_rng, Rng};
+use rand::{distributions::Uniform, prelude::Distribution, rngs::ThreadRng, thread_rng};
 
 use crate::{error::{AppError, AppResult}, parser::{parser::{FuzzData, FuzzExpr}, tokenizer::{ComparisonType, ExprVariable, LenExpr}}};
 
 /// Variables that have been assigned values go here.
+#[derive(Debug)]
 pub struct VarsData {
     /// Hashmap containing variables as its key and value as its, well, values.
     variables: HashMap<String, i64>,
@@ -47,7 +48,7 @@ impl VarsData {
 /// - `data`: the data struct that holds variable values
 /// - `size`: length of the array
 /// - `min`: minimum value of the array's items
-/// - `max`: maximum value of the array's items
+/// - `max`: maximum value of tfailed_testshfailed_testse array's items
 fn fill_array(rng: &mut ThreadRng, expr: &FuzzExpr, data: &mut VarsData, key: &str, size: &LenExpr, min: i64, max: i64) -> AppResult<i64> {
     let mut new_vec = Vec::new();
     let range = Uniform::from(min..=max);
@@ -164,36 +165,54 @@ fn build_exec_input(template: &[String], vars: &VarsData, sep: &str) -> AppResul
 
 }
 
-/// Execute
-fn execute(path: &str, input: &str) -> AppResult<String> {
+/// Execute the program and capture its output.
+///
+/// # Arguments
+/// - `path`: the executable's path
+/// - `input`: the input to feed into the program's stdin
+///
+/// # Outputs
+/// An AppResult containing the program's output when execution is successful. An `AppError`
+/// otherwise
+fn execute(path: &Path, input: &str) -> AppResult<String> {
     let (read, mut write) = pipe()?;
     write.write_all(&input.as_bytes())?;
     drop(write);
-    let mut cmd = Command::new(path).stdin(read).spawn()?;
-    let mut output = cmd.stdout.take().ok_or(AppError::NoOutput(input.to_string()))?;
+    let mut cmd = Command::new(path).stdin(read).stdout(Stdio::piped()).spawn()?;
+    let mut output = cmd.stdout.take().ok_or(AppError::NoOutput(path.to_path_buf()))?;
     let mut str = String::new();
     output.read_to_string(&mut str)?;
     Ok(str)
 }
 
+fn split_and_compare(sep: &str, string_1: &str, string_2: &str) -> bool {
+    string_1.trim_start().trim_end().split(sep).eq(string_2.trim_start().trim_end().split(sep))
+
+}
+
 pub struct Runner {
     data: FuzzData,
     variables_store: VarsData,
-    executable_1: String,
-    executable_2: String
+    executable_1: PathBuf,
+    executable_2: PathBuf,
+}
+
+pub enum RunnerResult {
+    Ok,
+    Fail(String, String)
 }
 
 impl Runner {
-    fn new(data: FuzzData, executable_1: String, executable_2: String) -> Self {
+    pub fn new(data: FuzzData, executable_1: PathBuf, executable_2: PathBuf) -> Self {
         Self {
             data,
             variables_store: VarsData::new(),
             executable_1,
-            executable_2
+            executable_2,
         }
     }
 
-    fn run_once(&mut self) -> AppResult<bool>{
+    pub fn run_once(&mut self) -> AppResult<RunnerResult>{
         let exprs = &self.data.exprs;
         let mut rng = thread_rng();
         for expr in exprs {
@@ -203,11 +222,15 @@ impl Runner {
         let output_1 = execute(&self.executable_1, &stdin)?;
         let output_2 = execute(&self.executable_2, &stdin)?;
 
-        if output_1.split(&self.data.output_separator).eq(output_2.split(&self.data.output_separator)) {
-            return Ok(true)
+        if split_and_compare(&self.data.output_separator, &output_1, &output_2) {
+            return Ok(RunnerResult::Ok)
         } else {
-            return Ok(false)
+            return Ok(RunnerResult::Fail(output_1, output_2))
         }
+    }
+
+    pub fn get_state(&self) -> &VarsData {
+        return &self.variables_store
     }
 
 }
@@ -271,5 +294,12 @@ mod tests {
 
         let built = build_exec_input(&template, &data, " ").unwrap();
         assert_eq!(built, "10 20 30 40 50 60".to_string())
+    }
+
+    #[test]
+    fn test_execute() {
+        let filepath = Path::new("examples/example");
+        let result = execute(filepath, "1\n2\n");
+        assert!(split_and_compare("\n", &result.unwrap(), "3"))
     }
 }

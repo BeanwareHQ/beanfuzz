@@ -1,4 +1,4 @@
-use std::fmt::Debug;
+use std::fmt::{Debug, Display};
 use std::process::{ExitCode, Termination};
 use std::path::PathBuf;
 
@@ -16,6 +16,10 @@ pub(crate) enum AppError {
     /// Checked during: CLI args parsing-time
     SameExecutable,
 
+
+    /// Not (an) executable.
+    /// Checked during: CLI args parsing-time
+    NotExecutable(PathBuf),
 
     /// File cannot be found. Contains a `PathBuf` to indicate the nonexistent file.
     /// Checked during: CLI args parsing-time
@@ -52,7 +56,7 @@ pub(crate) enum AppError {
     /// When program gives no output or another output reading error occured. Contains a `String`
     /// indicating the executable ran.
     /// Checked during: execution-time
-    NoOutput(String),
+    NoOutput(PathBuf),
 }
 
 pub(crate) struct AppResultData {
@@ -62,21 +66,52 @@ pub(crate) struct AppResultData {
     /// Amount of tests that fails
     pub(crate) failed_tests: u64,
 
+    /// Amount of tests skipped due to error(s)
+    pub(crate) error_tests: u64,
+
     /// Write test result to log file
     pub(crate) log_file: Option<PathBuf>
 }
 
+impl AppResultData {
+    pub fn new(log_file: Option<PathBuf>) -> Self {
+        Self {
+            successful_tests: 0,
+            failed_tests: 0,
+            error_tests: 0,
+            log_file
+        }
+    }
+}
+
+impl Display for AppResultData {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut string = String::new();
+        if self.failed_tests > 0 {
+            string.push_str("\n--TESTS FINISHED WITH WARNING--\n");
+        } else {
+            string.push_str("\n--TESTS FINISHED--\n");
+
+        }
+
+        string.push_str(&format!("Ok      : {}\n", self.successful_tests));
+        string.push_str(&format!("Failed  : {}\n", self.failed_tests));
+        string.push_str(&format!("Error   : {}\n", self.error_tests));
+        string.push_str(&format!("Log file: {:?}\n", self.log_file));
+
+        write!(f, "{}", string)
+        
+    }
+
+}
 impl Termination for AppResultData {
     fn report(self) -> std::process::ExitCode {
         let mut exit_code = 0;
         if self.failed_tests > 0 {
-            println!("--TESTS FINISHED WITH WARNING--\n");
             exit_code = 1;
-        } else {
-            println!("--TESTS FINISHED--\n");
         }
-        println!("Ok: {}", self.successful_tests);
-        println!("Failed: {}", self.failed_tests);
+
+        println!("{}", self.to_string());
 
         ExitCode::from(exit_code)
     }
@@ -97,7 +132,8 @@ impl Debug for AppError {
             Self::IOError(kind) => write!(f, "I/O error: {}", kind),
             Self::SameExecutable => write!(f, "Two executables point to the same path"),
             Self::InvalidArraySize(size, expr) => write!(f, "Invalid array size: {} at expression '{}'", size, expr),
-            Self::NoOutput(exe) => write!(f, "No output from executable {}!", exe)
+            Self::NoOutput(exe) => write!(f, "No output from executable {:?}!", exe),
+            Self::NotExecutable(exe) => write!(f, "{:?}: not an executable or is not executable", exe)
         }
     }
 }
