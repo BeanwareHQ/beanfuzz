@@ -48,6 +48,11 @@ pub(crate) enum AppError {
     /// `String` indicating the invalid expression
     /// Checked during: execution-time
     InvalidArraySize(i64, String),
+
+    /// When program gives no output or another output reading error occured. Contains a `String`
+    /// indicating the executable ran.
+    /// Checked during: execution-time
+    NoOutput(String),
 }
 
 pub(crate) struct AppResultData {
@@ -91,7 +96,8 @@ impl Debug for AppError {
             Self::NoInputOrder => write!(f, "No input order given"),
             Self::IOError(kind) => write!(f, "I/O error: {}", kind),
             Self::SameExecutable => write!(f, "Two executables point to the same path"),
-            Self::InvalidArraySize(size, expr) => write!(f, "Invalid array size: {} at expression '{}'", size, expr)
+            Self::InvalidArraySize(size, expr) => write!(f, "Invalid array size: {} at expression '{}'", size, expr),
+            Self::NoOutput(exe) => write!(f, "No output from executable {}!", exe)
         }
     }
 }

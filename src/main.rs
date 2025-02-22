@@ -3,6 +3,7 @@ mod file_handling;
 mod parser;
 mod error;
 mod cli;
+mod exec;
 
 use error::{AppResult, AppResultData};
 use file_handling::get_fuzz_data;

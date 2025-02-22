@@ -14,7 +14,7 @@ struct BufReaderLines {
 ///
 /// # Returns
 /// An `AppResult` containing `FuzzData` when parse is successful, an `AppErr` otherwise.
-pub fn get_fuzz_data(input_separator: char, output_separator: char, path: &Path) -> AppResult<FuzzData> {
+pub fn get_fuzz_data(input_separator: String, output_separator: String, path: &Path) -> AppResult<FuzzData> {
     let file = File::open(path)?;
     let reader = BufReader::new(file);
     let mut lines = Vec::new();

@@ -1,5 +1,6 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, io::{Read, Write}, process::{ChildStdout, Command}};
 
+use os_pipe::pipe;
 use rand::{distributions::Uniform, prelude::Distribution, rngs::ThreadRng, thread_rng, Rng};
 
 use crate::{error::{AppError, AppResult}, parser::{parser::{FuzzData, FuzzExpr}, tokenizer::{ComparisonType, ExprVariable, LenExpr}}};
@@ -25,8 +26,8 @@ impl VarsData {
         self.arrays.insert(key.to_string(), val);
     }
 
-    fn get_arr(&mut self, key: &str) -> Option<&mut Vec<i64>> {
-        self.arrays.get_mut(key)
+    fn get_arr(&self, key: &str) -> Option<&Vec<i64>> {
+        self.arrays.get(key)
     }
 
     fn new() -> Self {
@@ -130,6 +131,87 @@ fn _recurse_set_variables(rng: &mut ThreadRng, expr: &FuzzExpr, data: &mut VarsD
     return _recurse_set_variables(rng, expr, data, depth + 1, next_min);
 }
 
+/// Build the input for an executable, based on given information.
+///
+/// # Arguments
+/// - `template`: array of variable names
+/// - `vars`: variable data used to retrieve the variable values
+/// - `sep`: the separator for each variable values
+///
+/// # Returns
+/// An `AppResult` containing the built input when string is built successfuly. An AppError
+/// otherwise.
+fn build_exec_input(template: &[String], vars: &VarsData, sep: &str) -> AppResult<String> {
+    let mut str = String::new();
+    let last_idx = template.len() - 1;
+    for i in 0..=last_idx {
+        if let Some(val) = vars.get_var(&template[i]) {
+            str.push_str(&val.to_string());
+
+        } else if let Some(val) = vars.get_arr(&template[i]) {
+            let nums: Vec<String> = val.iter().map(ToString::to_string).collect();
+            str.push_str(&nums.join(&sep));
+
+        } else {
+            return Err(AppError::UndeclaredVariable(template[i].to_string()));
+        }
+
+        if i < last_idx {
+            str.push_str(&sep);
+        }
+    }
+    Ok(str)
+
+}
+
+/// Execute
+fn execute(path: &str, input: &str) -> AppResult<String> {
+    let (read, mut write) = pipe()?;
+    write.write_all(&input.as_bytes())?;
+    drop(write);
+    let mut cmd = Command::new(path).stdin(read).spawn()?;
+    let mut output = cmd.stdout.take().ok_or(AppError::NoOutput(input.to_string()))?;
+    let mut str = String::new();
+    output.read_to_string(&mut str)?;
+    Ok(str)
+}
+
+pub struct Runner {
+    data: FuzzData,
+    variables_store: VarsData,
+    executable_1: String,
+    executable_2: String
+}
+
+impl Runner {
+    fn new(data: FuzzData, executable_1: String, executable_2: String) -> Self {
+        Self {
+            data,
+            variables_store: VarsData::new(),
+            executable_1,
+            executable_2
+        }
+    }
+
+    fn run_once(&mut self) -> AppResult<bool>{
+        let exprs = &self.data.exprs;
+        let mut rng = thread_rng();
+        for expr in exprs {
+            recurse_set_variables(&mut rng, &expr, &mut self.variables_store)?;
+        }
+        let stdin = build_exec_input(&self.data.input_order, &self.variables_store, &self.data.input_separator)?;
+        let output_1 = execute(&self.executable_1, &stdin)?;
+        let output_2 = execute(&self.executable_2, &stdin)?;
+
+        if output_1.split(&self.data.output_separator).eq(output_2.split(&self.data.output_separator)) {
+            return Ok(true)
+        } else {
+            return Ok(false)
+        }
+    }
+
+}
+
 #[cfg(test)]
 mod tests {
     use crate::parser::{parser::parse_expr_from_line, tokenizer::tokenize_expr_line};
@@ -167,5 +249,27 @@ mod tests {
             recurse_set_variables(&mut thread_rng(), &expr, &mut data).unwrap();
             data.get_arr("A").unwrap().iter().for_each(|item| assert!(*item <= 100));
         }
+    }
+
+    #[test]
+    fn test_build_vars_from_template() {
+        let template: Vec<String> = vec!["A".into(), "B".into()];
+        let mut data = VarsData::new();
+        data.set_var("A", 100);
+        data.set_var("B", 200);
+
+        let built = build_exec_input(&template, &data, " ").unwrap();
+        assert_eq!(built, "100 200".to_string())
+    }
+
+    #[test]
+    fn test_build_var_arrays_from_template() {
+        let template: Vec<String> = vec!["A".into(), "B".into()];
+        let mut data = VarsData::new();
+        data.set_arr("A", vec![10, 20, 30]);
+        data.set_arr("B", vec![40, 50, 60]);
+
+        let built = build_exec_input(&template, &data, " ").unwrap();
+        assert_eq!(built, "10 20 30 40 50 60".to_string())
     }
 }
