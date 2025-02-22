@@ -9,21 +9,28 @@ use super::tokenizer::{tokenize_expr_line, ComparisonType, ExprVariable, Token, 
 pub(crate) struct FuzzExpr {
     /// The constant minimum of the expression.
     pub(crate) const_min: i64,
+
     /// The constant maximum of the expression.
-    const_max: i64,
+    pub(crate) const_max: i64,
+
     /// Variable groups declared inside the expression. For example, `0 <= B <= C,D <= 1000` will
-    /// give `vec[(C,D), (B)]`.
+    /// give `vec[(B), (C, D)]`.
     pub(crate) vars: Vec<VariableGroup>,
+
     /// Vector of comparisons that we use to modify the maximum constant when picking random
     /// number. When we encounter a less than comparison, we reduce the maximum random range by 1
     /// (we're talking inclusive range).
     pub(crate) comparisons: Vec<ComparisonType>,
+
     /// When the expression contains an array, we store it in a separate vector to evaluate later.
     /// This is because the array may contain another variable for the length, and since I don't
     /// want to bother with dependency resolving, this is good enough. However, cases with single
     /// expression like `0 <= A[N]# <= N <= 2000` will still not be allowed (as the `N` is declared
     /// _after_ `A[N]#`).
-    pub(crate) contains_array: bool
+    pub(crate) contains_array: bool,
+
+    /// How many less than's are in the expression. This is used to compute ranges and other stuff.
+    pub(crate) less_than_count: u64,
 
     /// The string representation of the expression. Used for debugging.
     pub(crate) repr: String
@@ -41,7 +48,7 @@ impl Display for FuzzExpr {
 /// operation.
 ///
 /// # Arguments
-/// - `slice`: The slice containing `ExprVariable`s.
+/// - `slice`: the slice containing `ExprVariable`s.
 ///
 /// # Returns
 /// A boolean indicating the existence of an array variable inside the slice.
@@ -54,15 +61,27 @@ fn expr_var_arr_contains_arr_var(slice: &[ExprVariable]) -> bool {
     false
 
 }
+
+/// Count how many `LessThan` comparisons are found in a slice.
+///
+/// # Arguments
+/// - `slice`: the slice containing `ComparisonType`s.
+///
+/// # Returns
+/// The count of `LessThan` comparison enums.
+fn count_less_thans(slice: &[ComparisonType]) -> u64 {
+    slice.iter().filter(|x| x == &&ComparisonType::LessThan).count() as u64
+}
+
 /// Try to parse a vector of tokens from a single line of file into an expression. Consumes the
-/// given tokens and moves it into the resulting `FuzzExpr`.
+/// given tokens (thus the mutable borrow) and moves it into the resulting `FuzzExpr`.
 ///
 /// # Arguments
 /// - `tokens`: slice of tokens to parse
 ///
 /// # Returns
 /// An `Option` containing a `FuzzExpr` when parsing is successful.
-fn parse_expr_from_line(tokens: &mut VecDeque<Token>) -> Option<FuzzExpr> {
+pub(crate) fn parse_expr_from_line(repr: &str, tokens: &mut VecDeque<Token>) -> Option<FuzzExpr> {
     // Do some sanity checks first: the least amount of valid tokens for a valid expression is 5
     // (e.g `2 <= x <= 10`).
     if tokens.len() < 5 {
@@ -114,6 +133,18 @@ fn parse_expr_from_line(tokens: &mut VecDeque<Token>) -> Option<FuzzExpr> {
             fuzz_expr.vars.push(vars);
         } else if let Token::NumValue(x) = second_token { // last item is a constant so we should stop parsing.
             fuzz_expr.const_max = x;
+
+            fuzz_expr.less_than_count = count_less_thans(&fuzz_expr.comparisons);
+
+            // invalid if max is smaller than min
+            if x < fuzz_expr.const_min {
+                return None
+            }
+
+            // also invalid when the possible range cannot fit the variables.
+            if (fuzz_expr.const_max - fuzz_expr.const_min).unsigned_abs() < fuzz_expr.less_than_count {
+                return None
+            }
             return Some(fuzz_expr)
         } else {
             return None
@@ -128,12 +159,12 @@ fn parse_expr_from_line(tokens: &mut VecDeque<Token>) -> Option<FuzzExpr> {
 #[derive(Debug, PartialEq)]
 pub(crate) struct FuzzData {
     /// Vector of valid fuzzer expressions.
-    exprs: Vec<FuzzExpr>,
+    pub(crate) exprs: Vec<FuzzExpr>,
     /// The input order. After all variables have been set in hashmap(s), the strings below will be
     /// used to lookup the variable values from the hashmap.
-    input_order: Option<Vec<String>>,
-    input_separator: char,
-    output_separator: char
+    pub(crate) input_order: Vec<String>,
+    pub(crate) input_separator: String,
+    pub(crate) output_separator: String
 }
 
 impl FuzzData {
@@ -145,8 +176,8 @@ impl FuzzData {
     /// - `lines`: an item that can be iterated over as `String`s
     /// 
     /// # Returns
-    /// A `AppResult` containing `Self` when parse succeeded. `Err` containing `AppError` otherwise.
-    pub(crate) fn parse<T: IntoIterator<Item = String>>(input_separator: char, output_separator: char, lines: T) -> AppResult<Self> {
+    /// An `AppResult` containing `Self` when parse succeeded. `Err` containing `AppError` otherwise.
+    pub(crate) fn parse<T: IntoIterator<Item = String>>(input_separator: String, output_separator: String, lines: T) -> AppResult<Self> {
         let mut exprs = Vec::new();
         let mut input_order = None;
         let mut i = 0;
@@ -184,12 +215,11 @@ impl FuzzData {
             }
         }
 
-        if input_order.is_none() {
-            return Err(AppError::NoInputOrder);
-        }
+        // When an expression contains an array, we have to evaluate them last.
+        exprs.sort_by_key(|x| if x.contains_array {1} else {0} );
 
         Ok(Self {
-            input_order,
+            input_order: input_order.ok_or(AppError::NoInputOrder)?,
             exprs,
             input_separator,
             output_separator
@@ -258,15 +288,28 @@ mod tests {
         };
 
         let should_be = FuzzData {
-            output_separator: '\n',
-            input_separator: '\n',
+            output_separator: "\n".to_string(),
+            input_separator: "\n".to_string(),
             exprs: vec![expr],
-            input_order: Some(vec!["A".into(), "C".into(), "D".into()])
+            input_order: vec!["A".into(), "C".into(), "D".into()]
         };
 
-        let result = FuzzData::parse('\n', '\n', file_string.into_iter()).unwrap();
+        let result = FuzzData::parse("\n".into(), "\n".into(), file_string.into_iter()).unwrap();
 
         assert_eq!(result, should_be);
+    }
+
+    #[test]
+    fn test_parse_invalid_max_bigger_than_min() {
+        let mut file_string: Vec<String> = Vec::new();
+        file_string.push("# Comment".into());
+        file_string.push("".into());
+        file_string.push("1000 < A[10]# <= C,D <= 1".into());
+        file_string.push("input order: A C D".into());
+
+        let result = FuzzData::parse("\n".into(), "\n".into(), file_string.into_iter()).unwrap_err();
+
+        assert_eq!(result, AppError::InvalidSyntax(3, "1000 < A[10]# <= C,D <= 1".into()));
     }
 
     #[test]
@@ -278,9 +321,22 @@ mod tests {
         file_string.push("1 < A[10]# <= C,D <= 100000".into());
         file_string.push("input order: A C D".into());
 
-        let result = FuzzData::parse('\n', '\n', file_string.into_iter()).unwrap_err();
+        let result = FuzzData::parse("\n".into(), "\n".into(), file_string.into_iter()).unwrap_err();
 
         assert_eq!(result, AppError::InvalidExpression(3, "()".into()));
+    }
+
+    #[test]
+    fn test_parse_invalid_range() {
+        let mut file_string: Vec<String> = Vec::new();
+        file_string.push("# Comment".into());
+        file_string.push("".into());
+        file_string.push("0 < A < B < 2".into());
+        file_string.push("input order: A C D".into());
+
+        let result = FuzzData::parse("\n".into(), "\n".into(), file_string.into_iter()).unwrap_err();
+
+        assert_eq!(result, AppError::InvalidSyntax(3, "0 < A < B < 2".into()));
     }
 
     #[test]
@@ -291,7 +347,7 @@ mod tests {
         file_string.push("< A[10]# <= C,D <= 100000 <".into()); // Can be tokenized but cannot be parsed
         file_string.push("input order: A C D".into());
 
-        let result = FuzzData::parse('\n', '\n', file_string.into_iter()).unwrap_err();
+        let result = FuzzData::parse("\n".into(), "\n".into(), file_string.into_iter()).unwrap_err();
 
         assert_eq!(result, AppError::InvalidSyntax(3, "< A[10]# <= C,D <= 100000 <".into()));
     }
