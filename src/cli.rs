@@ -22,11 +22,11 @@ pub(crate) struct CLIArgs {
 
     /// Input separator
     #[arg(short = 's', default_value = " ")]
-    pub(crate) input_sep: char,
+    pub(crate) input_sep: String,
 
     /// Output separator
     #[arg(short = 'o', default_value = " ")]
-    pub(crate) output_sep: char,
+    pub(crate) output_sep: String,
 }
 
 impl CLIArgs {
